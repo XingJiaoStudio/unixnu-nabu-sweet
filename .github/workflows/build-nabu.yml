@@ -93,19 +93,42 @@ jobs:
           KERNEL_CONFIG: DEVELOPMENT
         run: |
           set -o pipefail
-          bash build.sh 2>&1 | tee build.log
-          rc=$?
-          echo "=== build.sh exit: $rc ==="
-          exit $rc
+          # build.sh clones several apple-oss-distributions repos; a transient
+          # failure there surfaces as `exit code 128` with no other signal.
+          # Retry the whole script a few times before giving up.
+          for attempt in 1 2 3; do
+            echo "=== build.sh attempt $attempt ==="
+            if bash build.sh 2>&1 | tee "build-$attempt.log"; then
+              echo "build.sh succeeded on attempt $attempt"
+              cp "build-$attempt.log" build.log
+              exit 0
+            fi
+            rc=$?
+            echo "!!! attempt $attempt failed (rc=$rc)"
+            echo "--- git/network errors in this attempt ---"
+            grep -nE "fatal:|error 128|Could not resolve|Connection|RPC failed|early EOF|HTTP 5" \
+              "build-$attempt.log" | head -20 || echo "(none)"
+            # a failed clone leaves a half-populated work dir; the next attempt
+            # must start clean or it will reuse the broken tree
+            echo "--- cleaning partial clones ---"
+            rm -rf xnu bootstrap_cmds dtrace AvailabilityVersions Libsystem \
+                   libplatform libdispatch 2>/dev/null || true
+            sleep 15
+          done
+          echo "=== all attempts failed ==="
+          cp build-3.log build.log 2>/dev/null || true
+          exit 1
 
       - name: Dump build log on failure
         if: failure()
         working-directory: dxb
         run: |
+          echo "=== attempts ==="
+          ls -l build-*.log 2>/dev/null || echo "(none)"
           echo "=== last 200 lines of build.log ==="
-          tail -n 200 build.log || echo "(no build.log)"
-          echo "=== first errors ==="
-          grep -nE "error:|fatal:|Error [0-9]|unable to|failed" build.log | head -40 || echo "(no error lines)"
+          tail -n 200 build.log 2>/dev/null || echo "(no build.log)"
+          echo "=== errors ==="
+          grep -nE "error:|fatal:|Could not resolve|RPC failed|early EOF" build.log 2>/dev/null | head -40 || echo "(none)"
 
       - name: Stage the kernel as kernel.macho
         run: |
