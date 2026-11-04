@@ -1,0 +1,12 @@
+# UniXNU-nabu-sweet line-ending policy
+* text=auto eol=lf
+*.patch text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.dtb binary
+*.img binary
+*.bin binary

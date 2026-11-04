@@ -72,11 +72,40 @@ jobs:
           xcodebuild -version
           xcrun --find iig
 
+      - name: Show what build.sh will do (diagnostics)
+        working-directory: dxb
+        run: |
+          echo "=== build.sh version pins ==="
+          grep -nE "^(XNU|BOOTSTRAP|DTRACE|AVAILABILITYVERSIONS|LIBSYSTEM|LIBPLATFORM|LIBDISPATCH)_VERSION=" build.sh || true
+          echo "=== MACOS_VERSION=${MACOS_VERSION} MACHINE_CONFIG=${MACHINE_CONFIG} KERNEL_CONFIG=${KERNEL_CONFIG}"
+          echo "=== can we reach the Apple sources? ==="
+          git ls-remote --tags https://github.com/apple-oss-distributions/xnu.git 2>&1 | tail -5 || true
+          echo "=== patches staged ==="
+          ls patches/ | head -20
+          echo "=== build.sh syntax ==="
+          bash -n build.sh && echo "syntax OK"
+
       - name: Build XNU 8796 (SWEET platform, arm64)
         working-directory: dxb
         env:
           MAKEFLAGS: '-k'
-        run: bash build.sh
+          MACHINE_CONFIG: SWEET
+          KERNEL_CONFIG: DEVELOPMENT
+        run: |
+          set -o pipefail
+          bash build.sh 2>&1 | tee build.log
+          rc=$?
+          echo "=== build.sh exit: $rc ==="
+          exit $rc
+
+      - name: Dump build log on failure
+        if: failure()
+        working-directory: dxb
+        run: |
+          echo "=== last 200 lines of build.log ==="
+          tail -n 200 build.log || echo "(no build.log)"
+          echo "=== first errors ==="
+          grep -nE "error:|fatal:|Error [0-9]|unable to|failed" build.log | head -40 || echo "(no error lines)"
 
       - name: Stage the kernel as kernel.macho
         run: |
