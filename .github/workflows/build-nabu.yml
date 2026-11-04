@@ -46,23 +46,6 @@ jobs:
           repository: dipa-studio/ios-sweet
           path: ios-sweet
 
-      - name: Redirect the BearSSL fetch to a GitHub mirror
-        working-directory: ${{ github.workspace }}
-        run: |
-          # www.bearssl.org answers 502 for long stretches and the script runs
-          # under `set -euo pipefail`, so a single failed fetch aborts the
-          # whole kernel build:
-          #   fatal: unable to access https://www.bearssl.org/git/BearSSL/: 502
-          # status-im/BearSSL is a public GitHub mirror carrying the exact
-          # pinned commit (7bea48e5e850ab4cafbe68d3765cdaba13a86d6f).
-          echo "=== before ==="
-          grep -n "bearssl.org" "$SH"
-          sed -i "s|https://www.bearssl.org/git/BearSSL|https://github.com/status-im/BearSSL|" "$SH"
-          echo "=== after ==="
-          grep -n "BearSSL" "$SH"
-          if grep -q "bearssl.org" "$SH"; then echo "::error::upstream URL still present"; exit 1; fi
-          grep -q "status-im/BearSSL" "$SH" || { echo "::error::mirror URL not applied"; exit 1; }
-
 
       - name: Fetch darwin-xnu-build at the pinned commit ios-sweet uses
         env:
@@ -72,6 +55,11 @@ jobs:
           git -C dxb fetch -q --depth 1 "https://github.com/blacktop/darwin-xnu-build" "$DXB_SHA"
           git -C dxb checkout -q FETCH_HEAD
           cp ios-sweet/xnu/patches/*.patch ios-sweet/xnu/patches/*.sh dxb/patches/ 2>/dev/null || true
+          # bearssl.org answers 502 for long stretches; status-im/BearSSL is a
+          # public mirror carrying the same pinned commit, so rewrite the URL
+          # that build.sh will actually run.
+          sed -i "s|https://www.bearssl.org/git/BearSSL|https://github.com/status-im/BearSSL|" dxb/patches/0020-stage-bearssl.sh
+          grep -n "BearSSL" dxb/patches/0020-stage-bearssl.sh
           cp nabu/patches/01*.patch dxb/patches/ 2>/dev/null || true
           ls dxb/patches/01*.patch
           sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
@@ -139,23 +127,23 @@ jobs:
 
       - name: Dump build log on failure
         if: failure()
-        working-directory: dxb
+        working-directory: ${{ github.workspace }}
         run: |
           echo "=== attempts ==="
           echo "=== attempt logs present ==="
-          ls -l build-*.log 2>/dev/null || echo "(none)"
-          for f in build-1.log build-2.log build-3.log; do
+          ls -l dxb/build-*.log 2>/dev/null || echo "(none)"
+          for f in dxb/build-1.log dxb/build-2.log dxb/build-3.log; do
             [ -f "$f" ] || continue
             echo "--------- $f (last 30) ---------"
             tail -n 30 "$f"
             echo "--------- $f (git errors) ---------"
             grep -nE "fatal:|Could not resolve|RPC failed|early EOF|HTTP [0-9]|denied|timed out" "$f" | head -20 || echo "(none)"
           done
-          ls -l build-*.log 2>/dev/null || echo "(none)"
+          ls -l dxb/build-*.log 2>/dev/null || echo "(none)"
           echo "=== last 200 lines of build.log ==="
-          tail -n 200 build.log 2>/dev/null || echo "(no build.log)"
+          tail -n 200 dxb/build.log 2>/dev/null || echo "(no build.log)"
           echo "=== errors ==="
-          grep -nE "error:|fatal:|Could not resolve|RPC failed|early EOF" build.log 2>/dev/null | head -40 || echo "(none)"
+          grep -nE "error:|fatal:|Could not resolve|RPC failed|early EOF" dxb/build.log 2>/dev/null | head -40 || echo "(none)"
 
       - name: Upload build logs (always)
         if: always()
