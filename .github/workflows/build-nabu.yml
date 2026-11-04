@@ -245,6 +245,22 @@ jobs:
           command -v clang lld-link llvm-lib llvm-rc
           pip install -r unixnu/requirements.txt || true
 
+      - name: Enlarge FVMAIN_COMPACT for the bigger nabu device tree
+        run: |
+          # nabu.dtb is 715 KB vs raphael's 664 KB, so the stock 0x300-page
+          # FVMAIN_COMPACT (0x300000 bytes) overflows:
+          #   GenFv: ERROR 3000: the required fv image size 0x303118
+          #         exceeds the set fv image size 0x300000
+          FDF=uefi/Platforms/SurfaceDuo1Pkg/SurfaceDuo1.fdf
+          echo "=== before ==="
+          grep -n 'NumBlocks' "$FDF" | head -3
+          # only the first FVMAIN_COMPACT block count (line with 0x300); the
+          # compressed FVMAIN keeps NumBlocks = 0 by design.
+          sed -i '0,/NumBlocks     = 0x300/s//NumBlocks     = 0x340/' "$FDF"
+          echo "=== after ==="
+          grep -n 'NumBlocks' "$FDF" | head -3
+          echo "new FVMAIN_COMPACT size = 0x$(printf '%x' $((0x340 * 0x1000))) bytes"
+
       - name: Verify xiaomi-nabu exists in the Aloha tree
         run: |
           ls -la uefi/Platforms/SurfaceDuo1Pkg/Device/xiaomi-nabu || {
