@@ -1,0 +1,286 @@
+name: build-nabu
+
+# Turnkey builder for the Xiaomi Pad 5 (nabu, SM8150).
+#
+# nabu is the SAME SM8150 silicon as OnePlus 7 Pro (guacamole) and Redmi
+# K20 Pro (raphael), both of which already reach the iOS 16.7.16 userland.
+# This workflow reuses that proven SM8150 kernel and the Project Aloha UEFI,
+# swapping only the device tree (nabu.dtb) and the Apple Device Tree profile
+# (1600x2560 panel).
+#
+# Job 1 (macos-14): builds the SM8150 XNU 8796 kernel via dipa-studio/ios-sweet
+#                   + blacktop/darwin-xnu-build with MACHINE_CONFIG=SWEET.
+#                   Fully public; no private defconfig.
+# Job 2 (ubuntu):   builds the Aloha UEFI volume for TARGET_DEVICE=xiaomi-nabu,
+#                   packs the FAT payload (kernel + nabu ADT), packs boot.img.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - board.toml
+      - patches/**
+      - scripts/**
+      - .github/workflows/build-nabu.yml
+
+permissions:
+  contents: read
+
+jobs:
+  kernel:
+    runs-on: macos-14
+    timeout-minutes: 240
+    env:
+      MACOS_VERSION: "13.5"
+      MACHINE_CONFIG: SWEET
+      KERNEL_CONFIG: DEVELOPMENT
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: nabu
+
+      - name: Checkout ios-sweet (XNU 8796 build scripts + sweet patches)
+        uses: actions/checkout@v4
+        with:
+          repository: dipa-studio/ios-sweet
+          path: ios-sweet
+
+      - name: Fetch darwin-xnu-build at the pinned commit ios-sweet uses
+        env:
+          DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
+        run: |
+          git init -q dxb
+          git -C dxb fetch -q --depth 1 "https://github.com/blacktop/darwin-xnu-build" "$DXB_SHA"
+          git -C dxb checkout -q FETCH_HEAD
+          cp ios-sweet/xnu/patches/*.patch ios-sweet/xnu/patches/*.sh dxb/patches/ 2>/dev/null || true
+          cp nabu/patches/01*.patch dxb/patches/ 2>/dev/null || true
+          ls dxb/patches/01*.patch
+          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
+          grep -q 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh \
+            && echo "build.sh now builds a plain arm64 slice" \
+            || echo "::warning::ARCHS sed did not match"
+
+      - name: Host dependencies
+        run: |
+          brew install jq gum bash cmake ninja
+          printf '#!/bin/sh\nexit 0\n' | sudo tee /usr/local/bin/xcodes >/dev/null
+          sudo chmod +x /usr/local/bin/xcodes
+          XC=$(ls -d /Applications/Xcode_*.app | sort -V | head -1)
+          echo "DEVELOPER_DIR=$XC/Contents/Developer" >> "$GITHUB_ENV"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+          xcrun --find iig
+
+      - name: Build XNU 8796 (SWEET platform, arm64)
+        working-directory: dxb
+        env:
+          MAKEFLAGS: '-k'
+        run: bash build.sh
+
+      - name: Stage the kernel as kernel.macho
+        run: |
+          mkdir -p nabu/inputs/nabu
+          find dxb -type f -name 'kernel*' 2>/dev/null > /tmp/cands.txt
+          K=""
+          while IFS= read -r f; do
+            sz=$(wc -c < "$f" | tr -d ' ')
+            [ "$sz" -gt 2000000 ] || continue
+            magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
+            if [ "$magic" = "cffaedfe" ]; then K="$f"; break; fi
+          done < /tmp/cands.txt
+          if [ -z "$K" ]; then
+            echo "no Mach-O kernel found" >&2
+            while IFS= read -r f; do echo "  $(wc -c < "$f" | tr -d ' ') $(file -b "$f") $f" >&2; done < /tmp/cands.txt
+            exit 1
+          fi
+          echo "picked kernel: $K"
+          cp "$K" nabu/inputs/nabu/kernel.macho
+          ls -la nabu/inputs/nabu/kernel.macho
+
+      - name: Verify the CDC-ACM serial-log patch landed
+        run: |
+          SRC=dxb/xnu/bsd/dev/sweet_usb.c
+          grep -n 'GET_LINE_CODING' "$SRC" || echo "(no line-coding handling)"
+          grep -n 'ud_raw_send' "$SRC" || echo "(no raw log sender)"
+          if strings -a nabu/inputs/nabu/kernel.macho | grep -q 'Sweet iOS (USB Serial)' \
+             && grep -q 'GET_LINE_CODING' "$SRC"; then
+            echo "CDC-ACM serial-log patch: APPLIED"
+          else
+            echo "::error::the CDC-ACM patch was skipped"
+            exit 1
+          fi
+
+      - name: Verify the panel-digest patch landed
+        run: |
+          SRC=dxb/xnu/bsd/dev/sweet_usb.c
+          if grep -q 'panel_report' "$SRC" \
+             && strings -a nabu/inputs/nabu/kernel.macho | grep -qF '=== SWEET t=%us'; then
+            echo "panel-digest patch: APPLIED"
+          else
+            echo "::error::0103 was skipped"
+            exit 1
+          fi
+
+      - name: Verify the panel-report-state patch landed
+        run: |
+          SRC=dxb/xnu/bsd/dev/sweet_usb.c
+          if strings -a nabu/inputs/nabu/kernel.macho | grep -qF 'gui=%d' \
+             && grep -q 'int muted = sweet_console_muted' "$SRC"; then
+            echo "panel report state: APPLIED"
+          else
+            echo "::error::0111 was skipped"
+            exit 1
+          fi
+
+      - name: Verify the SpringBoard-focused panel landed
+        run: |
+          SRC=dxb/xnu/bsd/dev/sweet_usb.c
+          if strings -a nabu/inputs/nabu/kernel.macho | grep -qF 'sb=%u/%u fb=%u' \
+             && grep -q 'panel_sb\[' "$SRC"; then
+            echo "springboard panel: APPLIED"
+          else
+            echo "::error::0104 was skipped"
+            exit 1
+          fi
+
+      - name: Verify the page-rejection diagnostics landed
+        run: |
+          if strings -a nabu/inputs/nabu/kernel.macho | grep -qF 'SWEET CS: %s off=0x%llx' \
+             && grep -q 'sweetcs_allow' dxb/xnu/bsd/kern/kern_cs.c; then
+            echo "page-rejection diagnostics: APPLIED"
+          else
+            echo "::error::0105 was skipped"
+            exit 1
+          fi
+
+      - name: Verify the framebuffer/crash panel landed
+        run: |
+          SRC=dxb/xnu/bsd/dev/sweet_usb.c
+          if grep -q 'panel_fb\[' "$SRC" && grep -q 'sweetpanel' "$SRC" \
+             && strings -a nabu/inputs/nabu/kernel.macho | grep -qF -- '-- crash top --'; then
+            echo "framebuffer panel: APPLIED"
+          else
+            echo "::error::0107 was skipped"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nabu-kernel
+          path: nabu/inputs/nabu/kernel.macho
+          if-no-files-found: error
+
+  build:
+    needs: kernel
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the SM8150 kernel built by the kernel job
+        uses: actions/download-artifact@v4
+        with:
+          name: nabu-kernel
+          path: inputs/nabu
+
+      - name: Checkout UniXNU driver (pinned)
+        uses: actions/checkout@v4
+        with:
+          repository: UniXNU/UniXNU
+          ref: b6ae99c17194e6a18fd819d3148e69fe405e91fc
+          path: unixnu
+          submodules: recursive
+
+      - name: Checkout Project Aloha UEFI (SM8150)
+        uses: actions/checkout@v4
+        with:
+          repository: Project-Aloha/mu_aloha_platforms
+          ref: 0b79812897177e9fdd1fb8cb02f05f5338322541
+          path: uefi
+          submodules: recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Host tools (EDK2 + UniXNU driver)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build uuid-dev bison flex nasm iasl gcc g++ python3-dev clang lld llvm mtools unzip zip
+          for t in clang lld-link llvm-lib llvm-rc; do
+            if command -v "$t" >/dev/null 2>&1; then echo "have $t"; continue; fi
+            cand=$(ls /usr/lib/llvm-*/bin/"$t" /usr/bin/"$t"-* 2>/dev/null | sort -V | tail -1)
+            if [ -n "$cand" ]; then sudo ln -sf "$cand" "/usr/local/bin/$t"; echo "linked $t -> $cand"; else echo "MISSING $t"; fi
+          done
+          command -v clang lld-link llvm-lib llvm-rc
+          pip install -r unixnu/requirements.txt || true
+
+      - name: Verify xiaomi-nabu exists in the Aloha tree
+        run: |
+          ls -la uefi/Platforms/SurfaceDuo1Pkg/Device/xiaomi-nabu || {
+            echo "::error::xiaomi-nabu device directory missing in the Aloha checkout"; exit 1; }
+          find uefi/Platforms/SurfaceDuo1Pkg/Device/xiaomi-nabu -maxdepth 2 -type f | head -40
+
+      - name: Apply the SM8150 patches (vendored in this repo)
+        run: |
+          git -C unixnu apply ../patches/unixnu-guacamole.patch
+          git -C uefi apply ../patches/aloha-guacamole.patch
+          git -C unixnu/drivers/DarwinBoot apply ../../../patches/darwinboot-guacamole.patch
+
+      - name: Install the nabu device tree
+        run: |
+          mkdir -p uefi/inputs/uefi-prebuilt
+          cp inputs/uefi-prebuilt/nabu.dtb uefi/inputs/uefi-prebuilt/nabu.dtb 2>/dev/null || true
+          ls -l inputs/uefi-prebuilt/nabu.dtb
+          file inputs/uefi-prebuilt/nabu.dtb
+
+      - name: Fetch iPhone X (D22AP) base ADT (auto from public IPSW)
+        run: bash scripts/get-base-d22ap.sh
+
+      - name: Fetch the prebuilt BaseCrypto driver (Mu external dependency)
+        run: |
+          DEST=uefi/MU_BASECORE/CryptoPkg/Binaries/edk2-basecrypto-driver-bin_extdep
+          mkdir -p "$DEST"
+          curl -sL -o /tmp/cryptobin.zip \
+            https://github.com/microsoft/mu_crypto_release/releases/download/v1.1.3/Mu_CryptoBin_v1_1_3.zip
+          unzip -q -o /tmp/cryptobin.zip -d "$DEST"
+          ls -l "$DEST/Driver/Bin/CryptoDriver.inc.dsc"
+
+      - name: Build the UEFI firmware volume (SM8150 + xiaomi-nabu device)
+        env:
+          EXTRA_OPTFLAGS: "-Wno-error"
+        run: python3 scripts/build-firmware.py
+
+      - name: Pack the FAT payload (kernel + nabu ADT)
+        run: python3 scripts/build-payload.py
+
+      - name: Pack the Android boot image
+        run: python3 scripts/build-bootimg.py
+
+      - name: Dump build logs on failure
+        if: failure()
+        run: |
+          ls -la out/nabu/logs/ 2>/dev/null || echo "(no logs dir)"
+          for f in out/nabu/logs/*.log; do
+            [ -f "$f" ] || continue
+            echo "----- $f -----"
+            tail -n 60 "$f"
+          done
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: out/nabu/logs/
+          if-no-files-found: ignore
+
+      - name: Report
+        run: cat out/nabu/boot/boot.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: boot-nabu.img
+          path: out/nabu/boot/boot-boot.img
+          if-no-files-found: error

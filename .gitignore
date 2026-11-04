@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+out/
+inputs/nabu/
+uefi/
+unixnu/
+dxb/
+ios-sweet/
+*.log

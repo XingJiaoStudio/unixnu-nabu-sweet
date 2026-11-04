@@ -1,0 +1,96 @@
+# Xiaomi Pad 5 (nabu, SM8150) device repository for the SWEET XNU port.
+#
+# nabu is the SAME SM8150 silicon as OnePlus 7 Pro (guacamole) and Redmi K20
+# Pro (raphael), both of which already reach the iOS 16.7.16 userland with this
+# kernel. Only the device tree and the Apple Device Tree (ADT) profile differ
+# (nabu's panel is 1600x2560, raphael's is 1080x2340).
+#
+# The payload volume label stays "GUACESP": the patched UniXNU firmware
+# discovers the config by that label.
+
+[board]
+name = "nabu"
+soc = "SM8150"
+description = "Xiaomi Pad 5 (nabu)"
+kit = "nabu"
+
+[firmware]
+config = "nabu"
+dsc = "Platforms/SurfaceDuo1Pkg/SurfaceDuo1NoSb.dsc"
+fd = "Build/SurfaceDuo1Pkg/{target}_CLANGPDB/FV/SM8150_EFI.fd"
+submodules = [
+  "MU_BASECORE",
+  "Common/MU",
+  "Common/MU_OEM_SAMPLE",
+  "Platforms/CranePkg",
+  "Platforms/SurfaceDuoACPI",
+  "Features/DFCI",
+  "Features/CONFIG",
+  "Binaries",
+  "Platforms/OpensslPkg/Library/OpensslLib/openssl",
+  "Platforms/MbedTlsPkg/Library/MbedTlsLib/mbedtls",
+]
+packages = [
+  "{uefi}/Platforms",
+  "{uefi}/Common/MU",
+  "{uefi}/Common/MU_OEM_SAMPLE",
+  "{uefi}/Features/DFCI",
+  "{uefi}/Features/CONFIG",
+  "{uefi}/Binaries",
+  "{uefi}/Silicon/QC/Sm8150",
+  "{tree}/package",
+  "{tree}/drivers/DarwinBoot",
+  "{edk2}",
+]
+
+[firmware.defines]
+TARGET_DEVICE = "xiaomi-nabu"
+FDT = "nabu.dtb"
+SHARED_CRYPTO_PATH = "{edk2}/CryptoPkg/Binaries/edk2-basecrypto-driver-bin_extdep"
+CONF_AUTOGEN_INCLUDE_PATH = "{uefi}/Common/MU/AndromedaPkg/Include"
+MU_SCHEMA_DIR = "{uefi}/Common/MU/AndromedaPkg/CfgData"
+MU_SCHEMA_FILE_NAME = "AndromedaPkgCfgData.xml"
+
+[payload]
+volume = "GUACESP"
+size_mib = 64
+loader = "firmware"
+title = "Xiaomi Pad 5 (nabu) - XNU"
+dram_size = "0xc0000000"
+panic_screen = false
+timeout = 3
+kernel_args = [
+  "debug=0xc",
+  "serial=3",
+  "cpus=8",
+  "keepsyms=1",
+  "-enable_kprintf_spam",
+  "-noprogress",
+  "rd=ufsroot0",
+  "unentitled_ios_sim_launch=1",
+  "ignition_level=1",
+  "wdt_test=no_user_checkin",
+  "ufsrw=1",
+  "rootrw=1",
+  "launchd_unsecure_cache=1",
+  "wdt=-1",
+  "sweetusb=2",
+  "sweettouchdelay=20",
+  "sweetfb_hz=30",
+  "sweetgpu=3",
+  "sweetlogdump=1",
+]
+
+[payload.adt]
+tool = "scripts/make-nabu-adt.py"
+unique_chip_id = "required"
+owned_memory_size = "0xc0000000"
+
+[bootimg.image]
+base = 0x0
+kernel_offset = 0x8000
+ramdisk_offset = 0x800000
+abl_base = 0x80000000
+tags_offset = 0x100
+pagesize = 4096
+header_version = 0
