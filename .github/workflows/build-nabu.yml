@@ -268,21 +268,31 @@ jobs:
           command -v clang lld-link llvm-lib llvm-rc
           pip install -r unixnu/requirements.txt || true
 
-      - name: Enlarge FVMAIN_COMPACT for the bigger nabu device tree
+      - name: Enlarge the FD and FVMAIN_COMPACT for the bigger nabu device tree
         run: |
           # nabu.dtb is 715 KB vs raphael's 664 KB, so the stock 0x300-page
           # FVMAIN_COMPACT (0x300000 bytes) overflows:
           #   GenFv: ERROR 3000: the required fv image size 0x303118
           #         exceeds the set fv image size 0x300000
+          #
+          # The FD size, its NumBlocks and the FV region extent must all move
+          # together, otherwise build.py fails with:
+          #   error F003: FD SM8150_EFI Size not consistent with block array
           FDF=uefi/Platforms/SurfaceDuo1Pkg/SurfaceDuo1.fdf
+          NEW_SIZE=0x340000
+          NEW_BLOCKS=0x340
           echo "=== before ==="
-          grep -n 'NumBlocks' "$FDF" | head -3
-          # only the first FVMAIN_COMPACT block count (line with 0x300); the
-          # compressed FVMAIN keeps NumBlocks = 0 by design.
-          sed -i '0,/NumBlocks     = 0x300/s//NumBlocks     = 0x340/' "$FDF"
+          grep -nE "Size |NumBlocks|0x00000000\\|" "$FDF" | head -6
+          # 1) FD.SM8150_EFI Size
+          sed -i "s|^Size          = 0x00300000|Size          = $NEW_SIZE|" "$FDF"
+          # 2) FD.SM8150_EFI NumBlocks
+          sed -i "s|^NumBlocks     = 0x300|NumBlocks     = $NEW_BLOCKS|" "$FDF"
+          # 3) the FV region extent inside the FD
+          sed -i "s@^0x00000000|0x00300000@0x00000000|$NEW_SIZE@" "$FDF"
           echo "=== after ==="
-          grep -n 'NumBlocks' "$FDF" | head -3
-          echo "new FVMAIN_COMPACT size = 0x$(printf '%x' $((0x340 * 0x1000))) bytes"
+          grep -nE "Size |NumBlocks|0x00000000\\|" "$FDF" | head -6
+          echo "FD/FV size = $NEW_SIZE bytes, $NEW_BLOCKS pages"
+
 
       - name: Verify xiaomi-nabu exists in the Aloha tree
         run: |
