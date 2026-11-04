@@ -56,9 +56,18 @@ jobs:
           git -C dxb checkout -q FETCH_HEAD
           cp ios-sweet/xnu/patches/*.patch ios-sweet/xnu/patches/*.sh dxb/patches/ 2>/dev/null || true
           # bearssl.org answers 502 for long stretches; status-im/BearSSL is a
-          # public mirror carrying the same pinned commit, so rewrite the URL
-          # that build.sh will actually run.
-          sed -i "s|https://www.bearssl.org/git/BearSSL|https://github.com/status-im/BearSSL|" dxb/patches/0020-stage-bearssl.sh
+          # public mirror carrying the same pinned commit. BSD sed chokes on the
+          # URL delimiters, so rewrite it with Python instead.
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("dxb/patches/0020-stage-bearssl.sh")
+          s = p.read_text()
+          old = "https://www.bearssl.org/git/BearSSL"
+          new = "https://github.com/status-im/BearSSL"
+          assert old in s, "bearssl upstream URL not found"
+          p.write_text(s.replace(old, new))
+          print("bearssl ->", new)
+          PY
           grep -n "BearSSL" dxb/patches/0020-stage-bearssl.sh
           cp nabu/patches/01*.patch dxb/patches/ 2>/dev/null || true
           ls dxb/patches/01*.patch
