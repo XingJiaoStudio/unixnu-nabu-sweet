@@ -46,43 +46,22 @@ jobs:
           repository: dipa-studio/ios-sweet
           path: ios-sweet
 
-      - name: Patch the BearSSL fetch to fall back to a GitHub mirror
+      - name: Redirect the BearSSL fetch to a GitHub mirror
         run: |
           SH=ios-sweet/xnu/patches/0020-stage-bearssl.sh
-          echo "=== upstream script ==="
-          sed -n "1,14p" "$SH"
-          # ios-sweet fetches BearSSL from https://www.bearssl.org/git/BearSSL,
-          # which intermittently answers 502 and aborts the kernel build:
-          #   fatal: unable to access ... The requested URL returned error: 502
-          # The script runs under `set -euo pipefail`, so the upstream attempt
-          # must be guarded with `||` or no fallback is ever reached.
-          python3 - "$SH" <<'PY'
-          import re
-          import sys
-          from pathlib import Path
-
-          path = Path(sys.argv[1])
-          text = path.read_text()
-          pat = re.compile(
-              r"git -C \"\$bearssl_tmp\" fetch -q --depth 1 \\\n"
-              r"    https://www\.bearssl\.org/git/BearSSL \"\$bearssl_sha\"",
-          )
-          replacement = (
-              "if ! git -C \"$bearssl_tmp\" fetch -q --depth 1 \\\n"
-              "        https://www.bearssl.org/git/BearSSL \"$bearssl_sha\"; then\n"
-              "    echo \"bearssl.org unavailable; using the GitHub mirror\"\n"
-              "    git -C \"$bearssl_tmp\" fetch -q --depth 1 \\\n"
-              "        https://github.com/skiselev/bearssl.git \"$bearssl_sha\"\n"
-              "fi"
-          )
-          if not pat.search(text):
-              print("::error::could not locate the bearssl fetch block")
-              sys.exit(1)
-          path.write_text(pat.sub(lambda _m: replacement, text, count=1))
-          print("patched the bearssl fetch with a GitHub fallback")
-          PY
-          echo "=== patched script ==="
-          sed -n "1,20p" "$SH"
+          # www.bearssl.org answers 502 for long stretches and the script runs
+          # under `set -euo pipefail`, so a single failed fetch aborts the
+          # whole kernel build:
+          #   fatal: unable to access https://www.bearssl.org/git/BearSSL/: 502
+          # status-im/BearSSL is a public GitHub mirror carrying the exact
+          # pinned commit (7bea48e5e850ab4cafbe68d3765cdaba13a86d6f).
+          echo "=== before ==="
+          grep -n "bearssl.org" "$SH"
+          sed -i "s@https://www\\.bearssl\\.org/git/BearSSL@https://github.com/status-im/BearSSL@" "$SH"
+          echo "=== after ==="
+          grep -n "BearSSL" "$SH"
+          grep -q "bearssl.org" "$SH" && { echo "::error::upstream URL still present"; exit 1; } || true
+          grep -q "status-im/BearSSL" "$SH" || { echo "::error::mirror URL not applied"; exit 1; }
 
 
       - name: Fetch darwin-xnu-build at the pinned commit ios-sweet uses
