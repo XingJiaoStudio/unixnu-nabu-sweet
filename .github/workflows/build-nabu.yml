@@ -46,6 +46,45 @@ jobs:
           repository: dipa-studio/ios-sweet
           path: ios-sweet
 
+      - name: Patch the BearSSL fetch to fall back to a GitHub mirror
+        run: |
+          SH=ios-sweet/xnu/patches/0020-stage-bearssl.sh
+          echo "=== upstream script ==="
+          sed -n "1,14p" "$SH"
+          # ios-sweet fetches BearSSL from https://www.bearssl.org/git/BearSSL,
+          # which intermittently answers 502 and aborts the kernel build:
+          #   fatal: unable to access ... The requested URL returned error: 502
+          # The script runs under `set -euo pipefail`, so the upstream attempt
+          # must be guarded with `||` or no fallback is ever reached.
+          python3 - "$SH" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          text = path.read_text()
+          pat = re.compile(
+              r"git -C \"\$bearssl_tmp\" fetch -q --depth 1 \\\n"
+              r"    https://www\.bearssl\.org/git/BearSSL \"\$bearssl_sha\"",
+          )
+          replacement = (
+              "if ! git -C \"$bearssl_tmp\" fetch -q --depth 1 \\\n"
+              "        https://www.bearssl.org/git/BearSSL \"$bearssl_sha\"; then\n"
+              "    echo \"bearssl.org unavailable; using the GitHub mirror\"\n"
+              "    git -C \"$bearssl_tmp\" fetch -q --depth 1 \\\n"
+              "        https://github.com/skiselev/bearssl.git \"$bearssl_sha\"\n"
+              "fi"
+          )
+          if not pat.search(text):
+              print("::error::could not locate the bearssl fetch block")
+              sys.exit(1)
+          path.write_text(pat.sub(lambda _m: replacement, text, count=1))
+          print("patched the bearssl fetch with a GitHub fallback")
+          PY
+          echo "=== patched script ==="
+          sed -n "1,20p" "$SH"
+
+
       - name: Fetch darwin-xnu-build at the pinned commit ios-sweet uses
         env:
           DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
