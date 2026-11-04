@@ -395,5 +395,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: boot-nabu.img
-          path: out/nabu/boot/boot-boot.img
+          path: out/nabu/boot/boot-nabu.img
           if-no-files-found: error
