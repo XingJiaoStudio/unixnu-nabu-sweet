@@ -328,6 +328,7 @@ jobs:
       - name: Build the UEFI firmware volume (SM8150 + xiaomi-nabu device)
         env:
           EXTRA_OPTFLAGS: "-Wno-error"
+          NABU_FD_SIZE: "0x340000"
         run: python3 scripts/build-firmware.py
 
       - name: Pack the FAT payload (kernel + nabu ADT)

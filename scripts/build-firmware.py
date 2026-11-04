@@ -61,6 +61,28 @@ if cfg_src.is_file() and not cfg_dst.is_file():
     shutil.copy(cfg_src, cfg_dst)
     print(f"firmware: created {cfg_dst.name}")
 
+# The UniXNU driver validates the built .fd against [uefi_fd] size from the
+# Aloha config, so enlarging the FD in the .fdf is not enough: that value has
+# to match too, or firmware.build() raises
+#   "<fd> missing or not 0x300000 bytes"
+# after a perfectly good link. The config is generated above from
+# guacamole.toml, so patch it here while we still own the process.
+_fd_size = os.environ.get("NABU_FD_SIZE")
+if _fd_size:
+    _cfg = UEFI / "Resources" / "Configs" / "nabu.toml"
+    _text = _cfg.read_text()
+    _lines = []
+    _in_fd = False
+    for _line in _text.splitlines():
+        if _line.strip().startswith("["):
+            _in_fd = _line.strip() == "[uefi_fd]"
+        if _in_fd and _line.strip().startswith("size"):
+            print(f"firmware: {_cfg.name} uefi_fd.size {_line.strip()} -> size = {_fd_size}")
+            _line = f"size = {_fd_size}"
+        _lines.append(_line)
+    _cfg.write_text("\n".join(_lines) + "\n")
+    print(f"firmware: patched {_cfg}")
+
 board = tomllib.loads((ROOT / "board.toml").read_text())
 ctx = types.SimpleNamespace(
     board=board,
