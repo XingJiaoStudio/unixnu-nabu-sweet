@@ -47,7 +47,8 @@ jobs:
           path: ios-sweet
 
       - name: Redirect the BearSSL fetch to a GitHub mirror
-        run: |
+      - name: Redirect the BearSSL fetch to a GitHub mirror
+        working-directory: ${{ github.workspace }}
           SH=ios-sweet/xnu/patches/0020-stage-bearssl.sh
           # www.bearssl.org answers 502 for long stretches and the script runs
           # under `set -euo pipefail`, so a single failed fetch aborts the
