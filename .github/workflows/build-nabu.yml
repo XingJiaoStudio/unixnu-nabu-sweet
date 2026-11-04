@@ -124,11 +124,30 @@ jobs:
         working-directory: dxb
         run: |
           echo "=== attempts ==="
+          echo "=== attempt logs present ==="
+          ls -l build-*.log 2>/dev/null || echo "(none)"
+          for f in build-1.log build-2.log build-3.log; do
+            [ -f "$f" ] || continue
+            echo "--------- $f (last 30) ---------"
+            tail -n 30 "$f"
+            echo "--------- $f (git errors) ---------"
+            grep -nE "fatal:|Could not resolve|RPC failed|early EOF|HTTP [0-9]|denied|timed out" "$f" | head -20 || echo "(none)"
+          done
           ls -l build-*.log 2>/dev/null || echo "(none)"
           echo "=== last 200 lines of build.log ==="
           tail -n 200 build.log 2>/dev/null || echo "(no build.log)"
           echo "=== errors ==="
           grep -nE "error:|fatal:|Could not resolve|RPC failed|early EOF" build.log 2>/dev/null | head -40 || echo "(none)"
+
+      - name: Upload build logs (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-build-logs
+          path: |
+            dxb/build-*.log
+            dxb/build.log
+          if-no-files-found: ignore
 
       - name: Stage the kernel as kernel.macho
         run: |
