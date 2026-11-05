@@ -260,6 +260,8 @@ jobs:
   build:
     needs: kernel
     runs-on: ubuntu-latest
+    env:
+      FW_TARGET: "RELEASE"
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -337,7 +339,6 @@ jobs:
       - name: Build the UEFI firmware volume (SM8150 + xiaomi-nabu device)
         env:
           EXTRA_OPTFLAGS: "-Wno-error"
-          FW_TARGET: "RELEASE"
         run: python3 scripts/build-firmware.py
 
       - name: Pack the FAT payload (kernel + nabu ADT)
